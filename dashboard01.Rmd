@@ -1,0 +1,643 @@
+---
+title: "Texas Voter Turnout Rate Data"
+output: 
+  flexdashboard::flex_dashboard:
+    vertical_layout: fill
+    theme: 
+      version: 4
+      bootswatch: minty
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+
+library(shiny)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(scales)
+library(plotly)
+library(sf)
+library(leaflet)
+```
+
+
+# linechart
+
+
+-----------------------------------------------------------------------
+
+```{r}
+
+# 載入數據
+growth_data <- read.csv("combine_growth_data.csv")
+
+# 篩選 Texas 數據
+texas_data <- growth_data %>% filter(County == "Texas")
+
+# 整理數據為長格式 (加入初選數據)
+long_data <- data.frame(
+  Election = c(
+    "2012 Primary Election", "2012 Presidential Election",
+    "2014 Midterm Election",
+    "2016 Primary Election", "2016 Presidential Election",
+    "2018 Midterm Election",
+    "2020 Primary Election", "2020 Presidential Election",
+    "2022 Midterm Election"
+  ),
+  Population = c(texas_data$population_primary_2012, texas_data$population_general_2012,
+                 texas_data$population_midterm_2014,
+                 texas_data$population_primary_2016, texas_data$population_general_2016,
+                 texas_data$population_midterm_2018,
+                 texas_data$population_primary_2020, texas_data$population_general_2020,
+                 texas_data$population_general_2020),
+  Registered = c(texas_data$registration_primary_2012, texas_data$registration_general_2012,
+                 texas_data$registration_midterm_2014,
+                 texas_data$registration_primary_2016, texas_data$registration_general_2016,
+                 texas_data$registration_midterm_2018,
+                 texas_data$registration_primary_2020, texas_data$registration_general_2020,
+                 texas_data$registration_midterm_2022),
+  Voted = c(texas_data$turnout_primary_2012, texas_data$turnout_general_2012,
+            texas_data$turnout_midterm_2014,
+            texas_data$turnout_primary_2016, texas_data$turnout_general_2016,
+            texas_data$turnout_midterm_2018,
+            texas_data$turnout_primary_2020, texas_data$turnout_general_2020,
+            texas_data$turnout_midterm_2022)
+)
+
+# 數據轉換為長格式
+long_data <- pivot_longer(long_data, cols = c("Population", "Registered", "Voted"), 
+                          names_to = "Category", values_to = "Value")
+
+# 定義 X 軸排序
+election_order <- c(
+  "2012 Primary Election", "2012 Presidential Election",
+  "2014 Midterm Election",
+  "2016 Primary Election", "2016 Presidential Election",
+  "2018 Midterm Election",
+  "2020 Primary Election", "2020 Presidential Election",
+  "2022 Midterm Election"
+)
+
+# 定義 X 軸顯示的標籤
+election_labels <- c(
+  "2012\nprimary\nelection", "2012\npresidential\nelection",
+  "2014\nmidterm\nelection",
+  "2016\nprimary\nelection", "2016\npresidential\nelection",
+  "2018\nmidterm\nelection",
+  "2020\nprimary\nelection", "2020\npresidential\nelection",
+  "2022\nmidterm\nelection"
+)
+
+shinyApp(
+  # UI
+ui <- fluidPage(
+  titlePanel("Texas Election Data"),
+  sidebarLayout(
+    sidebarPanel(
+      checkboxGroupInput(
+        inputId = "selected_elections",
+        label = "Select Elections to Display:",
+        choices = election_order,
+        selected = election_order # 預設全選
+      )
+    ),
+    mainPanel(
+      plotlyOutput("line_plot", height = "calc(100vh - 100px)", width = "100%")
+    )
+  )
+),
+
+# Server
+server <- function(input, output) {
+  output$line_plot <- renderPlotly({
+    # 篩選數據
+    filtered_data <- long_data %>% filter(Election %in% input$selected_elections)
+    
+    # 繪製圖表
+    p <- ggplot(data = filtered_data, aes(x = factor(Election, levels = election_order), y = Value, color = Category)) +
+      geom_line(aes(group = Category), size = 1.2) +  # 每個類別一條線
+      geom_point(size = 3, aes(text = paste0("Value: ", scales::comma(Value)))) + # 自定義 tooltip
+      labs(
+        title = "Texas Population, Registered Voters, and Turnout (2012-2022)",
+        x = "Election",
+        y = "Number",
+        color = "Category"
+      ) +
+      scale_x_discrete(labels = election_labels) +
+      scale_y_continuous(
+        limits = c(0, 30000000),
+        breaks = seq(10000000, 30000000, by = 10000000),
+        labels = scales::comma
+      ) +
+      scale_color_manual(
+        values = c("Population" = "#41214e", 
+                   "Registered" = "#ae85bd", 
+                   "Voted" = "#d6c2dd")
+      ) +
+      theme_minimal(base_size = 15) +
+      theme(
+        plot.title = element_text(hjust = 0.5, size = 14),
+        plot.margin = unit(c(1, 1, 1, 1), "cm"),
+        axis.text.x = element_text(angle = 0, hjust = 0.5, size = 8),
+        axis.text.y = element_text(size = 7),
+        legend.position = "bottom"
+      )
+    
+    # 將 ggplot 轉為 plotly，並移除選舉名稱的 tooltip
+    ggplotly(p, tooltip = c("text", "color")) %>% 
+    layout(autosize = TRUE)  # 確保圖表自動縮放
+    
+  })
+}
+)
+```
+
+# barchart
+
+
+-----------------------------------------------------------------------
+
+
+```{r}
+# 載入資料
+data <- read.csv("combine_growth_data.csv")
+
+
+shinyApp(
+  ui <- fluidPage(
+  titlePanel("County Turnout Rates"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("election_type", "Select Election Type:",
+                  choices = c(
+                    "2012 Primary Election" = "TOrate_primary_2012",
+                    "2012 Presidential Election" = "TOrate_general_2012",
+                    "2014 Midterm Election" = "TOrate_midterm_2014",
+                    "2016 Primary Election" = "TOrate_primary_2016",
+                    "2016 Presidential Election" = "TOrate_general_2016",
+                    "2018 Midterm Election" = "TOrate_midterm_2018",
+                    "2020 Primary Election" = "TOrate_primary_2020",
+                    "2020 Presidential Election" = "TOrate_general_2020",
+                    "2022 Midterm Election" = "TOrate_midterm_2022"
+                  )),
+      radioButtons("display_type", "Display:",
+                   choices = c("Highest Rates" = "high", "Lowest Rates" = "low")),
+      sliderInput("n_counties", "Number of Counties to Display:",
+                  min = 5, max = 30, value = 10, step = 1) # 使用滑桿
+    ),
+    
+    mainPanel(
+      plotOutput("turnoutPlot")
+    )
+  )
+),
+
+server <- function(input, output) {
+  output$turnoutPlot <- renderPlot({
+    # 選擇資料並轉換為百分比
+    selected_data <- data %>%
+      select(County, Rate = all_of(input$election_type)) %>%
+      mutate(Rate = Rate * 100) # 將數值乘以 100
+    
+    # 確保 Texas 出現在資料中
+    texas_data <- selected_data %>% filter(County == "Texas")
+    if (nrow(texas_data) == 0) {
+      texas_data <- data.frame(County = "Texas", Rate = 0) # 預設值
+    }
+    
+    # 篩選最高或最低的數據
+    if (input$display_type == "high") {
+      filtered_data <- selected_data %>%
+        arrange(desc(Rate)) %>%
+        head(input$n_counties - 1) %>%
+        bind_rows(texas_data) %>%
+        distinct(County, .keep_all = TRUE)
+    } else {
+      filtered_data <- selected_data %>%
+        arrange(Rate) %>%
+        head(input$n_counties - 1) %>%
+        bind_rows(texas_data) %>%
+        distinct(County, .keep_all = TRUE)
+    }
+    
+    # 確保 Texas 固定在最右邊
+    filtered_data <- filtered_data %>%
+      mutate(County = factor(County, levels = c(setdiff(County, "Texas"), "Texas")))
+    
+    
+    # 動態計算文字大小
+    text_size <- max(1, 50 / input$n_counties) # 根據條數調整字體大小
+    
+    # 繪製圖表
+    ggplot(filtered_data, aes(
+      x = factor(County, levels = if (input$display_type == "high") {
+        filtered_data$County[order(filtered_data$Rate)]
+      } else {
+        filtered_data$County[order(-filtered_data$Rate)]
+      }),
+      y = Rate,
+      fill = ifelse(County == "Texas", "#333333", "#8b6499")
+    )) +
+      geom_bar(stat = "identity") +
+      coord_flip() +
+      scale_fill_identity() + # 使用指定顏色
+      scale_y_continuous(labels = percent_format(scale = 1), expand = c(0, 0.05)) + # Y 軸百分比格式
+      labs(title = "Voter Turnout by County",
+           x = "County",
+           y = "Turnout Rate (%)") +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+            plot.margin = unit(c(1, 1, 1, 1), "cm")) +
+      # 加上文字標籤
+      geom_text(
+        aes(label = sprintf("%.2f%%", Rate)),
+        color = "white", fontface = "bold", size = text_size, # 動態文字大小
+        hjust = 1.3
+      )
+  })
+}
+)
+
+```
+
+# map
+
+
+-----------------------------------------------------------------------
+
+```{r}
+
+# Set working directory
+setwd("C:/Users/USER/Desktop/6356/team_project")
+
+# Read Texas shapefile
+shapefile_path <- "Texas_County_Boundaries/County.shp"
+texas_shapefile <- st_read(shapefile_path, quiet = TRUE)
+
+# Convert shapefile to WGS84
+texas_shapefile <- st_transform(texas_shapefile, crs = 4326)
+
+# Read data
+data <- read.csv("dream_team05.csv")
+
+# Ensure consistent formatting by trimming whitespace
+data$County <- trimws(data$County)
+texas_shapefile$CNTY_NM <- trimws(texas_shapefile$CNTY_NM)
+
+# Merge shapefile and data
+merged_data <- texas_shapefile %>%
+  left_join(data, by = c("CNTY_NM" = "County"))
+
+
+shinyApp(
+  # Define UI
+ui <- fillPage(
+  titlePanel("Texas Voter Turnout Rate Map"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("election_type", "Select Election Type:",
+                  choices = c(
+                    "2012 Primary Election" = "TOrate_primary_2012",
+                    "2012 Presidential Election" = "TOrate_general_2012",
+                    "2014 Midterm Election" = "TOrate_midterm_2014",
+                    "2016 Primary Election" = "TOrate_primary_2016",
+                    "2016 Presidential Election" = "TOrate_general_2016",
+                    "2018 Midterm Election" = "TOrate_midterm_2018",
+                    "2020 Primary Election" = "TOrate_primary_2020",
+                    "2020 Presidential Election" = "TOrate_general_2020",
+                    "2022 Midterm Election" = "TOrate_midterm_2022"
+                  ),
+                  selected = "TOrate_general_2016"),
+      textInput("county_search", "Search for County:", "")  # 搜索輸入框
+    ),
+    mainPanel(
+      leafletOutput("growthMap", height = "600px")  # 設置地圖大小
+    )
+  )
+),
+
+server <- function(input, output, session) {
+  
+  # 更新 merged_data 為全局變數，包含 Percentage
+  merged_data <- reactive({
+    texas_shapefile %>%
+      left_join(data, by = c("CNTY_NM" = "County")) %>%
+      mutate(
+        Percentage = !!sym(input$election_type) * 100  # 計算百分比
+      )
+  })
+  
+  observeEvent(input$county_search, {
+    # 當用戶輸入縣名時進行搜索
+    county_name <- trimws(input$county_search)
+    
+    if (county_name != "") {
+      # 找到匹配的縣
+      selected_county <- merged_data() %>%
+        filter(CNTY_NM == county_name)
+      
+      # 如果找到結果，僅高亮該縣
+      if (nrow(selected_county) > 0) {
+        leafletProxy("growthMap") %>%
+          clearGroup("highlight") %>%  # 清除之前的高亮
+          addPolygons(
+            data = selected_county,
+            fillColor = "yellow",  # 高亮顏色
+            weight = 3,
+            color = "red",  # 邊框顏色
+            fillOpacity = 0.7,
+            group = "highlight",  # 分組為高亮
+            label = ~paste0("<b>", CNTY_NM, "</b>"),  # 鼠標懸停時顯示
+            labelOptions = labelOptions(
+              style = list(
+                "font-weight" = "bold", 
+                "font-size" = "12px", 
+                "color" = "#333"  # 標籤文字顏色
+              )
+            ),
+            popup = ~paste0(
+              "<b>County:</b> ", CNTY_NM, "<br>",
+              "<b>Turnout Rate:</b> ", round(Percentage, 2), "%"
+            )  # 點擊時顯示
+          )
+      }
+      
+    }
+  })
+  
+  output$growthMap <- renderLeaflet({
+    # 獲取最新的 merged_data
+    updated_data <- merged_data()
+    
+    # 根據選定的年份，動態選擇對應的 CWPP 變量
+    cwpp_column <- paste0("CWPP", substr(input$election_type, nchar(input$election_type) - 3, nchar(input$election_type)))
+    
+    # 如果該列不存在，則創建為空值避免錯誤
+    if (!cwpp_column %in% names(updated_data)) {
+      updated_data[[cwpp_column]] <- NA
+    }
+    
+    # 定義調色盤
+    palette <- colorNumeric(
+      palette = c("#f4edf4", "#d6c2dd", "#ae85bd", "#734d80", "#41214e"),
+      domain = updated_data$Percentage
+    )
+    
+    # 創建地圖
+    leaflet(data = updated_data) %>%
+      addTiles() %>%  # 添加基本地圖層
+      setView(lng = -99.9018, lat = 31.9686, zoom = 6) %>%
+      addPolygons(
+        fillColor = ~palette(Percentage),
+        weight = ~ifelse(updated_data[[cwpp_column]] == 1, 3, 1),  # 動態設定邊框寬度
+        color = ~ifelse(updated_data[[cwpp_column]] == 1, "#cf2391", "white"),  # CWPP = 1 時邊框顏色為藍
+        fillOpacity = 1,
+        label = ~paste0("<b>", CNTY_NM, "</b>"),
+        labelOptions = labelOptions(
+          style = list(
+            "font-weight" = "bold", 
+            "font-size" = "12px", 
+            "color" = "#333"
+          )
+        ),
+        popup = ~paste0(
+          "<b>County:</b> ", CNTY_NM, "<br>",
+          "<b>Turnout Rate:</b> ", round(Percentage, 2), "%", "<br>",
+          "<b>CWPP:</b> ", ifelse(is.na(updated_data[[cwpp_column]]), "N/A", updated_data[[cwpp_column]])
+        ),
+        highlightOptions = highlightOptions(
+          weight = 3,
+          color = "#666",
+          fillOpacity = 1,
+          bringToFront = TRUE
+        )
+      ) %>%
+      addLegend(
+        position = "bottomleft",
+        pal = palette,
+        values = updated_data$Percentage,
+        title = "Turnout Rate (%)",
+        opacity = 1
+      )
+  })
+}
+)
+
+```
+
+# scatterplot
+
+
+
+-----------------------------------------------------------------------
+
+```{r}
+
+# Load the dataset
+data <- read.csv("dream_team05.csv")
+
+# 將 CWPP 變數轉換為因子
+data$CWPP2012 <- as.factor(data$CWPP2012)
+data$CWPP2014 <- as.factor(data$CWPP2014)
+data$CWPP2016 <- as.factor(data$CWPP2016)
+data$CWPP2018 <- as.factor(data$CWPP2018)
+data$CWPP2020 <- as.factor(data$CWPP2020)
+data$CWPP2022 <- as.factor(data$CWPP2022)
+
+# 定義變數名稱的對應
+variable_labels <- list(
+  "TOrate_primary_2012" = "2012 Primary Election",
+  "TOrate_general_2012" = "2012 Presidential Election",
+  "TOrate_midterm_2014" = "2014 Midterm Election",
+  "TOrate_primary_2016" = "2016 Primary Election",
+  "TOrate_general_2016" = "2016 Presidential Election",
+  "TOrate_midterm_2018" = "2018 Midterm Election",
+  "TOrate_primary_2020" = "2020 Primary Election",
+  "TOrate_general_2020" = "2020 Presidential Election",
+  "TOrate_midterm_2022" = "2022 Midterm Election",
+  
+  "Median_Age" = "Median age of the population",
+  "Percent_Urban" = "Percentage of urban residents",
+  "Percent_Hispanic" = "Percentage of Hispanic residents",
+  "Percent_White" = "Percentage of White residents",
+  "Percent_Black" = "Percentage of Black residents",
+  "Percent_Asian" = "Percentage of Asian residents",
+  "Median_Household_Income2022" = "Median household income",
+  "Unemploy_Rate2020" = "Unemployment rate",
+  "Percent_Poverty" = "Percentage of people in poverty",
+  "Percent_Poverty_under18" = "Percentage of children in poverty",
+  "Percent_Bachelor" = "Percentage with a bachelor's degree"
+)
+
+# 定義所有 Y 軸變數
+y_variables <- c(
+  "TOrate_primary_2012",
+  "TOrate_general_2012",
+  "TOrate_midterm_2014",
+  "TOrate_primary_2016",
+  "TOrate_general_2016",
+  "TOrate_midterm_2018",
+  "TOrate_primary_2020",
+  "TOrate_general_2020",
+  "TOrate_midterm_2022"
+)
+
+# 定義分組變數對應
+grouping_variables <- list(
+  "TOrate_primary_2012" = "CWPP2012",
+  "TOrate_general_2012" = "CWPP2012",
+  "TOrate_midterm_2014" = "CWPP2014",
+  "TOrate_primary_2016" = "CWPP2016",
+  "TOrate_general_2016" = "CWPP2016",
+  "TOrate_midterm_2018" = "CWPP2018",
+  "TOrate_primary_2020" = "CWPP2020",
+  "TOrate_general_2020" = "CWPP2020",
+  "TOrate_midterm_2022" = "CWPP2022"
+)
+
+shinyApp(
+  # UI
+ui <- fluidPage(
+  titlePanel("Relationship Between Voter Turnout Rate and Demographic Data"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput(
+        "x_var", 
+        "Choose X-Axis",
+        choices = c(
+          "Median age of the population" = "Median_Age", 
+          "Percentage of urban residents" = "Percent_Urban", 
+          "Percentage of Hispanic residents" = "Percent_Hispanic",
+          "Percentage of White residents" = "Percent_White", 
+          "Percentage of Black residents" = "Percent_Black", 
+          "Percentage of Asian residents" = "Percent_Asian", 
+          "Median household income" = "Median_Household_Income2022",
+          "Unemployment rate" = "Unemploy_Rate2020", 
+          "Percentage of people in poverty" = "Percent_Poverty",
+          "Percentage of children in poverty" = "Percent_Poverty_under18", 
+          "Percentage with a bachelor's degree" = "Percent_Bachelor"
+        )
+      ),
+      checkboxInput("group", "Group by Consolidation", value = FALSE)
+    ),
+    mainPanel(
+      fluidRow(
+        uiOutput("scatterPlotsRow1"),
+        uiOutput("scatterPlotsRow2"),
+        uiOutput("scatterPlotsRow3"),
+        height = "calc(100vh - 100px)", width = "100%"
+      )
+    )
+  )
+),
+
+# Server
+server <- function(input, output) {
+  
+  # 動態生成散佈圖
+  output$scatterPlotsRow1 <- renderUI({
+    plots <- lapply(1:3, function(i) {
+      y_var <- y_variables[i]
+      plotOutput(outputId = paste0("plot_", y_var), height = "300px")
+    })
+    fluidRow(lapply(plots, function(plot) column(4, plot)))
+  })
+  
+  output$scatterPlotsRow2 <- renderUI({
+    plots <- lapply(4:6, function(i) {
+      y_var <- y_variables[i]
+      plotOutput(outputId = paste0("plot_", y_var), height = "300px")
+    })
+    fluidRow(lapply(plots, function(plot) column(4, plot)))
+  })
+  
+  output$scatterPlotsRow3 <- renderUI({
+    plots <- lapply(7:9, function(i) {
+      y_var <- y_variables[i]
+      plotOutput(outputId = paste0("plot_", y_var), height = "300px")
+    })
+    fluidRow(lapply(plots, function(plot) column(4, plot)))
+  })
+  
+  lapply(y_variables, function(y_var) {
+    output[[paste0("plot_", y_var)]] <- renderPlot({
+      x_label <- variable_labels[[input$x_var]]
+      y_label <- variable_labels[[y_var]]
+      group_var <- if (input$group) grouping_variables[[y_var]] else NULL
+      
+      if (is.null(group_var)) {
+        formula <- as.formula(paste(y_var, "~", input$x_var))
+        model <- lm(formula, data = data)
+        p_value <- summary(model)$coefficients[2, 4]
+        
+        line_color <- if (p_value < 0.001) {
+          "#cf2391"
+        } else if (p_value < 0.01) {
+          "#c01fc2"
+        } else if (p_value < 0.05) {
+          "#781db2"
+        } else {
+          "#441db4"
+        }
+        
+        p_label <- if (p_value < 0.001) {
+          "p < 0.001"
+        } else if (p_value < 0.01) {
+          "0.001 < p < 0.01"
+        } else if (p_value < 0.05) {
+          "0.01 < p < 0.05"
+        } else {
+          "p > 0.05"
+        }
+        
+        ggplot(data, aes_string(x = input$x_var, y = y_var)) +
+          geom_point(alpha = 0.6, size = 2) +
+          geom_smooth(method = "lm", se = FALSE, color = line_color) +
+          annotate("text", x = -Inf, y = Inf, label = p_label, hjust = -0.1, vjust = 1.5, size = 3.5, color = line_color) +
+          labs(x = x_label, y = y_label, title = paste(y_label, "vs\n", x_label)) +
+          theme_minimal() +
+          theme(plot.margin = unit(c(0.5, 0.1, 0.5, 0.1), "cm"))
+      } else {
+        # 建立調節效果模型
+        interaction_formula <- as.formula(paste(y_var, "~", input$x_var, "*", group_var))
+        interaction_model <- lm(interaction_formula, data = data)
+        interaction_p_value <- summary(interaction_model)$coefficients[4, 4]
+        
+        # 根據調節 p 值決定標註顏色
+        interaction_color <- if (interaction_p_value < 0.001) {
+          "red"
+        } else if (interaction_p_value < 0.01) {
+          "orange"
+        } else if (interaction_p_value < 0.05) {
+          "limegreen"
+        } else {
+          "blue"
+        }
+        
+        interaction_label <- if (interaction_p_value < 0.001) {
+          "p (interaction) < 0.001"
+        } else if (interaction_p_value < 0.01) {
+          "0.001 < p (interaction) < 0.01"
+        } else if (interaction_p_value < 0.05) {
+          "0.01 < p (interaction) < 0.05"
+        } else {
+          "p (interaction) > 0.05"
+        }
+        
+        ggplot(data, aes_string(x = input$x_var, y = y_var, color = group_var, group = group_var)) +
+          geom_point(alpha = 0.6, size = 2) +
+          geom_smooth(method = "lm", se = FALSE) +
+          annotate("text", x = -Inf, y = Inf, label = interaction_label, hjust = -0.1, vjust = 1.5, size = 3.5, color = interaction_color) +
+          labs(x = x_label, y = y_label, title = paste(y_label, "vs\n", x_label), color = "CWPP") +
+          theme_minimal() +
+          theme(plot.margin = unit(c(0.5, 0.1, 0.5, 0.1), "cm"))
+      }
+    })
+  })
+}
+)
+
+```
